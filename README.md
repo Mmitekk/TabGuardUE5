@@ -5,6 +5,8 @@
 
 ![UE 5.8](https://img.shields.io/badge/UE-5.8-blue) ![Win64](https://img.shields.io/badge/platform-Win64-lightgrey) ![Editor](https://img.shields.io/badge/module-Editor-green) ![MIT](https://img.shields.io/badge/license-MIT-yellow)
 
+![TabGuard buttons on the Level Editor toolbar — Save Tabs / Restore Tabs / Кнопки TabGuard на тулбаре Level Editor — Save Tabs / Restore Tabs](Docs/toolbar-buttons.png)
+
 ---
 
 <p align="center">
