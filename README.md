@@ -36,7 +36,8 @@
 
 1. **Автосохраняет список открытых ассетов** при каждом открытии/закрытии вкладки (дебаунс 0.5 с) в свой файл `Saved/TabGuard/TabSnapshot.json` (+ ротация `.bak`) — движок этот файл не трогает, поэтому снапшот переживает краши и wipe конфигов;
 2. Добавляет кнопки **Save Tabs** и **Restore Tabs** на тулбар Level Editor (секция `User`) и в меню **Window** — после краша вкладки возвращаются в один клик;
-3. Не влияет на упакованную игру (модуль только `Type: Editor`).
+3. Даёт **5 слотов**: можно вручную сохранить текущий набор вкладок в слот и загрузить его обратно одним кликом — например, «набор для AI», «набор для ландшафта» и т.д.;
+4. Не влияет на упакованную игру (модуль только `Type: Editor`).
 
 ### Как это работает
 
@@ -73,6 +74,17 @@
   ]
 }
 ```
+
+### Слоты
+
+Помимо автосохранения есть **5 ручных слотов** (`Saved/TabGuard/Slots/Slot1..5.json`):
+
+- Открой выпадающее меню **Slots** на тулбаре Level Editor (рядом с Save/Restore Tabs) или **Window → TabGuard Slots**.
+- **Save to Slot N** — сохранить текущий набор открытых вкладок в слот (перезаписывает содержимое слота).
+- **Slot N — 3 tab(s), 12.10.2026 14:05 UTC** — загрузить набор из слота; пункт серый, пока слот пуст.
+- В подсказке пункта сохранения видно, что сейчас лежит в слоте и сколько вкладок будет перезаписано.
+- Количество слотов меняется одной константой `MaxSlots` в `TabGuardSubsystem.h`.
+- У слотов нет собственного автосейва — это осознанно: слот фиксирует набор вкладок на момент явного сохранения и не меняется, пока ты сам не перезапишешь его.
 
 ### Совместимость
 
@@ -111,7 +123,8 @@ After a crash, the UE editor often **loses open tabs**:
 
 1. **Auto-saves the list of open assets** on every tab open/close (0.5 s debounce) into its own file `Saved/TabGuard/TabSnapshot.json` (plus `.bak` rotation) — the engine never touches this file, so the snapshot survives crashes and config wipes;
 2. Adds **Save Tabs** and **Restore Tabs** buttons to the Level Editor toolbar (`User` section) and the **Window** menu — one click brings tabs back after a crash;
-3. Never affects the packaged game (`Type: Editor` module only).
+3. Provides **5 slots**: manually store the current tab set into a slot and load it back with one click — e.g. an "AI set", a "landscape set", etc.;
+4. Never affects the packaged game (`Type: Editor` module only).
 
 ### How it works
 
@@ -136,6 +149,17 @@ Crash / layout loss → Restore Tabs button
 - **Save Tabs** — force a snapshot right now (rarely needed: auto-save already runs).
 - **Restore Tabs** — reopen tabs from the snapshot. Missing/deleted assets are silently skipped, already-open ones are not duplicated.
 - Snapshot file: `Saved/TabGuard/TabSnapshot.json` (format shown in the Russian section above).
+
+### Slots
+
+In addition to auto-save there are **5 manual slots** (`Saved/TabGuard/Slots/Slot1..5.json`):
+
+- Open the **Slots** dropdown on the Level Editor toolbar (next to Save/Restore Tabs) or **Window → TabGuard Slots**.
+- **Save to Slot N** — store the current set of open tabs into the slot (overwrites its content).
+- **Slot N — 3 tab(s), 12.10.2026 14:05 UTC** — load the set from the slot; the entry is grayed out while the slot is empty.
+- The save entry's tooltip shows what the slot currently holds and how many tabs would be overwritten.
+- The number of slots is a single constant: `MaxSlots` in `TabGuardSubsystem.h`.
+- Slots have no auto-save of their own — by design: a slot freezes the tab set at the moment you explicitly save it and never changes until you overwrite it yourself.
 
 ### Compatibility
 

@@ -25,6 +25,12 @@ FString UTabGuardSubsystem::GetBackupFilePath()
 	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TabGuard/TabSnapshot.bak.json"));
 }
 
+FString UTabGuardSubsystem::GetSlotFilePath(int32 SlotIndex)
+{
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TabGuard/Slots"),
+		FString::Printf(TEXT("Slot%d.json"), SlotIndex + 1));
+}
+
 void UTabGuardSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -117,18 +123,16 @@ bool UTabGuardSubsystem::HandleDeferredSave(float DeltaTime)
 	return false; // one-shot
 }
 
-void UTabGuardSubsystem::SaveSnapshot()
+bool UTabGuardSubsystem::WriteSnapshotToFile(const FString& FilePath)
 {
-	bSavePending = false;
-
 	if (!GEditor)
 	{
-		return;
+		return false;
 	}
 	UAssetEditorSubsystem* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
 	if (!AssetEditor)
 	{
-		return;
+		return false;
 	}
 
 	TArray<UObject*> EditedAssets = AssetEditor->GetAllEditedAssets();
@@ -160,17 +164,6 @@ void UTabGuardSubsystem::SaveSnapshot()
 	}
 	SortedPaths.Sort();
 
-	const FString SnapshotPath = GetSnapshotFilePath();
-	const FString BackupPath = GetBackupFilePath();
-
-	// Rotate: keep previous snapshot as .bak before overwriting.
-	IFileManager& FileManager = IFileManager::Get();
-	FileManager.MakeDirectory(*FPaths::GetPath(SnapshotPath), true);
-	if (FileManager.FileExists(*SnapshotPath))
-	{
-		FileManager.Copy(*BackupPath, *SnapshotPath, true, true);
-	}
-
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetNumberField(TEXT("Version"), 1);
 	Root->SetStringField(TEXT("SavedAt"), FDateTime::UtcNow().ToIso8601());
@@ -187,52 +180,60 @@ void UTabGuardSubsystem::SaveSnapshot()
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
 	if (!FJsonSerializer::Serialize(Root, Writer))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("TabGuard: failed to serialize snapshot"));
-		return;
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: failed to serialize snapshot to %s"), *FilePath);
+		return false;
 	}
 
-	if (FFileHelper::SaveStringToFile(OutString, *SnapshotPath))
+	IFileManager::Get().MakeDirectory(*FPaths::GetPath(FilePath), true);
+	if (!FFileHelper::SaveStringToFile(OutString, *FilePath))
 	{
-		UE_LOG(LogTemp, Log, TEXT("TabGuard: saved %d tab(s) to %s"), SortedPaths.Num(), *SnapshotPath);
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: failed to write %s"), *FilePath);
+		return false;
 	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("TabGuard: failed to write %s"), *SnapshotPath);
-	}
+
+	UE_LOG(LogTemp, Log, TEXT("TabGuard: saved %d tab(s) to %s"), SortedPaths.Num(), *FilePath);
+	return true;
 }
 
-void UTabGuardSubsystem::RestoreSnapshot()
+void UTabGuardSubsystem::SaveSnapshot()
+{
+	bSavePending = false;
+
+	const FString SnapshotPath = GetSnapshotFilePath();
+
+	// Rotate: keep previous snapshot as .bak before overwriting.
+	if (IFileManager::Get().FileExists(*SnapshotPath))
+	{
+		IFileManager::Get().Copy(*GetBackupFilePath(), *SnapshotPath, true, true);
+	}
+
+	WriteSnapshotToFile(SnapshotPath);
+}
+
+int32 UTabGuardSubsystem::ReadSnapshotAndOpen(const FString& FilePath)
 {
 	if (!GEditor)
 	{
-		return;
+		return -1;
 	}
 	UAssetEditorSubsystem* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
 	if (!AssetEditor)
 	{
-		return;
+		return -1;
 	}
 
-	const FString SnapshotPath = GetSnapshotFilePath();
 	FString FileContent;
-	if (!FFileHelper::LoadFileToString(FileContent, *SnapshotPath))
+	if (!FFileHelper::LoadFileToString(FileContent, *FilePath))
 	{
-		FNotificationInfo Info(LOCTEXT("TabGuard_NoSnapshot", "TabGuard: no snapshot found yet. Open some assets first — they are saved automatically."));
-		Info.ExpireDuration = 5.0f;
-		FSlateNotificationManager::Get().AddNotification(Info);
-		UE_LOG(LogTemp, Warning, TEXT("TabGuard: no snapshot at %s"), *SnapshotPath);
-		return;
+		return -1;
 	}
 
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileContent);
 	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
 	{
-		FNotificationInfo Info(LOCTEXT("TabGuard_BadSnapshot", "TabGuard: snapshot file is corrupted."));
-		Info.ExpireDuration = 5.0f;
-		FSlateNotificationManager::Get().AddNotification(Info);
-		UE_LOG(LogTemp, Warning, TEXT("TabGuard: corrupted snapshot at %s"), *SnapshotPath);
-		return;
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: corrupted snapshot at %s"), *FilePath);
+		return -1;
 	}
 
 	TArray<FString> SavedPaths;
@@ -256,12 +257,10 @@ void UTabGuardSubsystem::RestoreSnapshot()
 	}
 
 	int32 Restored = 0;
-	int32 Skipped = 0;
 	for (const FString& Path : SavedPaths)
 	{
 		if (OpenPaths.Contains(Path))
 		{
-			++Skipped;
 			continue;
 		}
 		FSoftObjectPath SoftPath(Path);
@@ -274,15 +273,127 @@ void UTabGuardSubsystem::RestoreSnapshot()
 		++Restored;
 	}
 
+	return Restored;
+}
+
+void UTabGuardSubsystem::RestoreSnapshot()
+{
+	const int32 Restored = ReadSnapshotAndOpen(GetSnapshotFilePath());
+	if (Restored < 0)
+	{
+		FNotificationInfo Info(LOCTEXT("TabGuard_NoSnapshot", "TabGuard: no snapshot found yet. Open some assets first — they are saved automatically."));
+		Info.ExpireDuration = 5.0f;
+		FSlateNotificationManager::Get().AddNotification(Info);
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: no snapshot at %s"), *GetSnapshotFilePath());
+		return;
+	}
+
 	FText Message = FText::Format(
-		LOCTEXT("TabGuard_Restored", "TabGuard: reopened {0} tab(s), {1} already open."),
-		FText::AsNumber(Restored), FText::AsNumber(Skipped));
+		LOCTEXT("TabGuard_Restored", "TabGuard: reopened {0} tab(s) from autosave snapshot."),
+		FText::AsNumber(Restored));
 	FNotificationInfo Info(Message);
 	Info.ExpireDuration = 5.0f;
 	FSlateNotificationManager::Get().AddNotification(Info);
 
-	UE_LOG(LogTemp, Log, TEXT("TabGuard: restored %d tab(s), skipped %d already-open (from %d saved)"),
-		Restored, Skipped, SavedPaths.Num());
+	UE_LOG(LogTemp, Log, TEXT("TabGuard: restored %d tab(s) from autosave snapshot"), Restored);
+}
+
+bool UTabGuardSubsystem::SaveSnapshotToSlot(int32 SlotIndex)
+{
+	if (SlotIndex < 0 || SlotIndex >= MaxSlots)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: invalid slot index %d"), SlotIndex);
+		return false;
+	}
+
+	if (!WriteSnapshotToFile(GetSlotFilePath(SlotIndex)))
+	{
+		return false;
+	}
+
+	FTabGuardSlotInfo Info;
+	if (GetSlotInfo(SlotIndex, Info))
+	{
+		FText Message = FText::Format(
+			LOCTEXT("TabGuard_SlotSaved", "TabGuard: {0} tab(s) saved to Slot {1}."),
+			FText::AsNumber(Info.AssetCount), FText::AsNumber(SlotIndex + 1));
+		FNotificationInfo Notification(Message);
+		Notification.ExpireDuration = 4.0f;
+		FSlateNotificationManager::Get().AddNotification(Notification);
+	}
+	return true;
+}
+
+bool UTabGuardSubsystem::RestoreSnapshotFromSlot(int32 SlotIndex)
+{
+	if (SlotIndex < 0 || SlotIndex >= MaxSlots)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TabGuard: invalid slot index %d"), SlotIndex);
+		return false;
+	}
+
+	const int32 Restored = ReadSnapshotAndOpen(GetSlotFilePath(SlotIndex));
+	if (Restored < 0)
+	{
+		FText Message = FText::Format(
+			LOCTEXT("TabGuard_SlotEmpty", "TabGuard: Slot {0} is empty or corrupted."),
+			FText::AsNumber(SlotIndex + 1));
+		FNotificationInfo Info(Message);
+		Info.ExpireDuration = 5.0f;
+		FSlateNotificationManager::Get().AddNotification(Info);
+		return false;
+	}
+
+	FText Message = FText::Format(
+		LOCTEXT("TabGuard_SlotRestored", "TabGuard: reopened {0} tab(s) from Slot {1} (already-open tabs skipped)."),
+		FText::AsNumber(Restored), FText::AsNumber(SlotIndex + 1));
+	FNotificationInfo Info(Message);
+	Info.ExpireDuration = 5.0f;
+	FSlateNotificationManager::Get().AddNotification(Info);
+
+	return true;
+}
+
+int32 UTabGuardSubsystem::GetSlotAssetCount(int32 SlotIndex) const
+{
+	FTabGuardSlotInfo Info;
+	return GetSlotInfo(SlotIndex, Info) ? Info.AssetCount : 0;
+}
+
+bool UTabGuardSubsystem::GetSlotInfo(int32 SlotIndex, FTabGuardSlotInfo& OutInfo)
+{
+	if (SlotIndex < 0 || SlotIndex >= MaxSlots)
+	{
+		return false;
+	}
+
+	const FString FilePath = GetSlotFilePath(SlotIndex);
+	if (!IFileManager::Get().FileExists(*FilePath))
+	{
+		return false;
+	}
+
+	FString FileContent;
+	if (!FFileHelper::LoadFileToString(FileContent, *FilePath))
+	{
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FileContent);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		return false;
+	}
+
+	OutInfo.bExists = true;
+	OutInfo.AssetCount = Root->GetArrayField(TEXT("Assets")).Num();
+	FString SavedAt;
+	if (Root->TryGetStringField(TEXT("SavedAt"), SavedAt))
+	{
+		FDateTime::ParseIso8601(*SavedAt, OutInfo.SavedAtUtc);
+	}
+	return true;
 }
 
 int32 UTabGuardSubsystem::GetSnapshotAssetCount() const
