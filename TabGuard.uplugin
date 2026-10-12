@@ -1,0 +1,20 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "TabGuard",
+	"Description": "Auto-saves open asset tabs on every open/close into Saved/TabGuard and restores them via toolbar button after crash or layout loss. Crash-safe complement to ConfigGuard.",
+	"Category": "Editor",
+	"CreatedBy": "KingdomOfIsrion",
+	"EngineVersion": "5.8.0",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "TabGuard",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
