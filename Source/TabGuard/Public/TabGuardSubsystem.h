@@ -65,6 +65,9 @@ public:
 	/** Reads slot file header (count + timestamp) without opening anything. */
 	static bool GetSlotInfo(int32 SlotIndex, FTabGuardSlotInfo& OutInfo);
 
+	/** Path-string filter shared by both collection sources (engine map + own tracking). */
+	static bool IsSnapshotablePath(const FString& Path);
+
 private:
 	void BindAssetDelegates();
 	void ScheduleSave();
@@ -84,4 +87,10 @@ private:
 	FTSTicker::FDelegateHandle DeferredSaveHandle;
 	bool bSavePending = false;
 	bool bDelegatesBound = false;
+
+	// Own tracking of open asset PATHS (strings, immune to weak-pointer staleness in the
+	// engine's OpenedAssets map, e.g. after hot-reload/reimport object replacement).
+	// Maintained from OnAssetOpenedInEditor/OnAssetClosedInEditor; united with
+	// UAssetEditorSubsystem::GetAllEditedAssets() on every save.
+	TSet<FString> TrackedOpenAssetPaths;
 };

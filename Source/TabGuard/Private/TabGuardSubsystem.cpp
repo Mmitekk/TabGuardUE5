@@ -84,16 +84,56 @@ void UTabGuardSubsystem::BindAssetDelegates()
 	AssetClosedHandle = AssetEditor->OnAssetClosedInEditor().AddUObject(this, &UTabGuardSubsystem::OnAssetClosed);
 	bDelegatesBound = true;
 
+	// Seed own tracking with whatever the engine map already has (assets opened before we bound).
+	for (UObject* Asset : AssetEditor->GetAllEditedAssets())
+	{
+		if (IsValid(Asset) && Asset->GetOutermost() != GetTransientPackage())
+		{
+			const FString Path = Asset->GetPathName();
+			if (IsSnapshotablePath(Path))
+			{
+				TrackedOpenAssetPaths.Add(Path);
+			}
+		}
+	}
+
 	UE_LOG(LogTemp, Log, TEXT("TabGuard: tracking asset tabs (snapshot: %s)"), *GetSnapshotFilePath());
+}
+
+bool UTabGuardSubsystem::IsSnapshotablePath(const FString& Path)
+{
+	return !Path.IsEmpty()
+		&& !Path.StartsWith(TEXT("/Temp/"))
+		&& !Path.StartsWith(TEXT("/Engine/Transient"));
 }
 
 void UTabGuardSubsystem::OnAssetOpened(UObject* Asset, IAssetEditorInstance* Instance)
 {
+	if (IsValid(Asset) && Asset->GetOutermost() != GetTransientPackage())
+	{
+		const FString Path = Asset->GetPathName();
+		if (IsSnapshotablePath(Path))
+		{
+			TrackedOpenAssetPaths.Add(Path);
+		}
+	}
 	ScheduleSave();
 }
 
 void UTabGuardSubsystem::OnAssetClosed(UObject* Asset, IAssetEditorInstance* Instance)
 {
+	// At broadcast time the closing editor is still registered in the engine map,
+	// so Num() == 1 means no other editor keeps this asset open.
+	if (IsValid(Asset) && GEditor)
+	{
+		if (UAssetEditorSubsystem* AssetEditor = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>())
+		{
+			if (AssetEditor->FindEditorsForAsset(Asset).Num() <= 1)
+			{
+				TrackedOpenAssetPaths.Remove(Asset->GetPathName());
+			}
+		}
+	}
 	ScheduleSave();
 }
 
@@ -139,6 +179,9 @@ bool UTabGuardSubsystem::WriteSnapshotToFile(const FString& FilePath)
 
 	TSet<FString> UniquePaths;
 	TArray<FString> SortedPaths;
+
+	// Source 1: the engine's map (weak pointers — can go stale, e.g. after object replacement).
+	int32 EngineMapCount = 0;
 	for (UObject* Asset : EditedAssets)
 	{
 		if (!IsValid(Asset))
@@ -150,8 +193,8 @@ bool UTabGuardSubsystem::WriteSnapshotToFile(const FString& FilePath)
 		{
 			continue;
 		}
-		FString Path = Asset->GetPathName();
-		if (Path.IsEmpty() || Path.StartsWith(TEXT("/Temp/")))
+		const FString Path = Asset->GetPathName();
+		if (!IsSnapshotablePath(Path))
 		{
 			continue;
 		}
@@ -160,9 +203,30 @@ bool UTabGuardSubsystem::WriteSnapshotToFile(const FString& FilePath)
 		if (bIsNew)
 		{
 			SortedPaths.Add(Path);
+			++EngineMapCount;
+		}
+	}
+
+	// Source 2: own path tracking from open/close delegates (strings — immune to GC staleness).
+	int32 TrackedCount = 0;
+	for (const FString& Path : TrackedOpenAssetPaths)
+	{
+		if (!IsSnapshotablePath(Path))
+		{
+			continue;
+		}
+		bool bIsNew = false;
+		UniquePaths.Add(Path, &bIsNew);
+		if (bIsNew)
+		{
+			SortedPaths.Add(Path);
+			++TrackedCount;
 		}
 	}
 	SortedPaths.Sort();
+
+	UE_LOG(LogTemp, Log, TEXT("TabGuard: save %s: %d from engine map, %d extra tracked, %d total"),
+		*FilePath, EngineMapCount, TrackedCount, SortedPaths.Num());
 
 	TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetNumberField(TEXT("Version"), 1);

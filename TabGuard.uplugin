@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 2,
-	"VersionName": "1.1.0",
+	"Version": 3,
+	"VersionName": "1.1.1",
 	"FriendlyName": "TabGuard",
 	"Description": "Auto-saves open asset tabs on every open/close into Saved/TabGuard and restores them via toolbar button after crash or layout loss. Crash-safe complement to ConfigGuard.",
 	"Category": "Editor",
